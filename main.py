@@ -3,6 +3,12 @@ import os
 import sys
 import time
 
+
+# Add to imports in main.py
+from core.converter import frame_to_ascii, frame_to_ascii_grid
+from core.window import close_window, poll_window_key, render_ascii_canvas, show_window
+
+
 from core.converter import frame_to_ascii
 from core.palettes import PALETTES
 from core.renderer import (
@@ -64,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fps", type=int, default=30, help="Target FPS cap in webcam mode (default: 30)"
     )
+    parser.add_argument(
+    "--window",
+    action="store_true",
+    help="Display webcam ASCII output in a separate GUI window instead of the terminal",
+)
 
     return parser.parse_args()
 
@@ -90,7 +101,7 @@ def run_image_mode(args: argparse.Namespace) -> None:
 
 
 def run_webcam_mode(args: argparse.Namespace) -> None:
-    """Stream webcam frames to the terminal with live keyboard controls."""
+    """Stream webcam frames to either the terminal or a separate GUI window."""
     styles = list(PALETTES.keys())
     style_idx = styles.index(args.style)
     width = max(20, min(240, args.width))
@@ -99,15 +110,18 @@ def run_webcam_mode(args: argparse.Namespace) -> None:
     edge_mode = args.edges
 
     frame_delay = 1.0 / max(1, args.fps)
+    smoothed_fps = float(args.fps)
     notice = ""
     notice_until = 0.0
 
-    init_terminal()
+    if not args.window:
+        init_terminal()
+
+    prev_frame_time = time.perf_counter()
+
     try:
         for frame in stream_webcam(camera_index=args.camera, mirror=True):
-            loop_start = time.perf_counter()
-
-            key = poll_keypress()
+            key = poll_window_key() if args.window else poll_keypress()
             if key == "q":
                 break
             elif key == "c":
@@ -122,7 +136,8 @@ def run_webcam_mode(args: argparse.Namespace) -> None:
                 width = min(240, width + 10)
             elif key in ("-", "_"):
                 width = max(20, width - 10)
-                sys.stdout.write("\033[2J")
+                if not args.window:
+                    sys.stdout.write("\033[2J")
             elif key == "s":
                 preview_art = frame_to_ascii(
                     frame=frame,
@@ -136,30 +151,55 @@ def run_webcam_mode(args: argparse.Namespace) -> None:
                 notice = f" | Saved: {saved_path}"
                 notice_until = time.perf_counter() + 2.5
 
-            ascii_art = frame_to_ascii(
-                frame=frame,
-                width=width,
-                style=styles[style_idx],
-                invert=invert,
-                color=color,
-                edge_mode=edge_mode,
-            )
-
-            elapsed = time.perf_counter() - loop_start
-            if elapsed < frame_delay:
-                time.sleep(frame_delay - elapsed)
-
-            actual_fps = 1.0 / max(1e-6, time.perf_counter() - loop_start)
             active_notice = notice if time.perf_counter() < notice_until else ""
             status_bar = (
                 f"[{styles[style_idx]} | W:{width} | Color:{'ON' if color else 'OFF'} | "
-                f"Edges:{'ON' if edge_mode else 'OFF'} | {actual_fps:.0f} FPS]  "
+                f"Edges:{'ON' if edge_mode else 'OFF'} | {smoothed_fps:.0f} FPS]  "
                 f"Keys: [C]olor [E]dges [I]nvert [P]alette [+/-]Size [S]ave [Q]uit"
                 f"{active_notice}"
             )
-            render_frame(ascii_art, status_bar=status_bar)
+
+            if args.window:
+                ascii_lines, resized_bgr = frame_to_ascii_grid(
+                    frame=frame,
+                    width=width,
+                    style=styles[style_idx],
+                    invert=invert,
+                    edge_mode=edge_mode,
+                )
+                canvas = render_ascii_canvas(
+                    ascii_lines=ascii_lines,
+                    bgr_frame=resized_bgr if color else None,
+                    invert=invert,
+                    status_bar=status_bar,
+                )
+                if not show_window(canvas):
+                    break
+            else:
+                ascii_art = frame_to_ascii(
+                    frame=frame,
+                    width=width,
+                    style=styles[style_idx],
+                    invert=invert,
+                    color=color,
+                    edge_mode=edge_mode,
+                )
+                render_frame(ascii_art, status_bar=status_bar)
+
+            work_elapsed = time.perf_counter() - prev_frame_time
+            if work_elapsed < frame_delay:
+                time.sleep(frame_delay - work_elapsed)
+
+            now = time.perf_counter()
+            frame_dt = max(1e-6, now - prev_frame_time)
+            prev_frame_time = now
+            instant_fps = 1.0 / frame_dt
+            smoothed_fps = 0.85 * smoothed_fps + 0.15 * instant_fps
     finally:
-        restore_terminal()
+        if args.window:
+            close_window()
+        else:
+            restore_terminal()
 
 
 def main() -> None:

@@ -42,6 +42,25 @@ def apply_ansi_color(ascii_lines: list[str], bgr_frame: np.ndarray) -> str:
     return "\n".join(colored_lines)
 
 
+def frame_to_ascii_grid(
+    frame: np.ndarray,
+    width: int = 100,
+    style: str = "standard",
+    invert: bool = True,
+    edge_mode: bool = False,
+) -> tuple[list[str], np.ndarray]:
+    """Return the 2D list of ASCII rows alongside the resized BGR frame."""
+    resized = resize_frame(frame, width=width)
+    processed = (
+        detect_edges(resized)
+        if edge_mode
+        else cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    )
+    palette = get_palette(style=style, invert=invert)
+    ascii_lines = map_pixels_to_chars(processed, palette)
+    return ascii_lines, resized
+
+
 def frame_to_ascii(
     frame: np.ndarray,
     width: int = 100,
@@ -51,16 +70,9 @@ def frame_to_ascii(
     edge_mode: bool = False,
 ) -> str:
     """Convert a BGR OpenCV frame into a formatted ASCII art string."""
-    resized = resize_frame(frame, width=width)
-
-    if edge_mode:
-        processed = detect_edges(resized)
-    else:
-        processed = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-
-    palette = get_palette(style=style, invert=invert)
-    ascii_lines = map_pixels_to_chars(processed, palette)
-
+    ascii_lines, resized = frame_to_ascii_grid(
+        frame=frame, width=width, style=style, invert=invert, edge_mode=edge_mode
+    )
     if color:
         return apply_ansi_color(ascii_lines, resized)
     return "\n".join(ascii_lines)
